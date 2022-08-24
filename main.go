@@ -26,7 +26,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	client.ProvisionKeys()
+	//client.ProvisionKeys()
 	client.Work(board)
 
 }

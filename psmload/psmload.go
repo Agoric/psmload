@@ -1,6 +1,7 @@
 package psmload
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"github.com/gammazero/workerpool"
@@ -99,15 +100,19 @@ func (p *PSMLoadApp) provisionAddress(address string) error {
 	resp, err := p.client.PostForm(fmt.Sprintf("%s/go", endpoint), data)
 	if err != nil {
 		zap.L().Error("error provisioning address", zap.Error(err))
+		return fmt.Errorf("error provisioning")
 	}
 	defer resp.Body.Close()
 	ret, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		zap.L().Error("error reading body", zap.Error(err))
+		return fmt.Errorf("error provisioning")
 	}
 	if string(ret) != "success" {
 		zap.L().Info("body", zap.String("body", string(ret)))
+		return fmt.Errorf("error provisioning")
 	}
+	zap.L().Info("provisioned client", zap.String("address", address))
 	return nil
 }
 func (p *PSMLoadApp) ProvisionKeys() error {
@@ -197,13 +202,25 @@ func (p *PSMLoadApp) broadcastOffer(idx int64, offerData string) (string, error)
 	//agd broadcast
 	cmdargs := []string{"--node", p.instagoricToService("rpc"),
 		"--chain-id", p.chainId, "--from", keyName(idx), "--keyring-backend=test", "-b", "sync", "--home", p.homeDir, "tx", "swingset", "wallet-action", "-y", "--allow-spend", offerData}
-	out, err := exec.Command("agd", cmdargs...).Output()
+	cmd := exec.Command("agd", cmdargs...)
+	var outb, errb bytes.Buffer
+	cmd.Stdout = &outb
+	cmd.Stderr = &errb
+	err := cmd.Run()
+
 	if err != nil {
-		zap.L().Error("error broadcasting offer", zap.Error(err), zap.ByteString("output", out))
+		if strings.Index(errb.String(), "not found: key not found") >= 0 {
+			p.provisionAddress(p.keys[idx])
+			time.Sleep(10 * time.Second)
+			zap.L().Info("client is not provisioned", zap.String("addr", p.keys[idx]))
+		} else {
+			zap.L().Error("error broadcasting offer", zap.Error(err), zap.String("output", outb.String()), zap.String("stderr", errb.String()))
+		}
+		//try reprovisioning
 		return "", fmt.Errorf("error broadcasting offer")
 	}
 
-	for _, match := range txChain.FindAllStringSubmatch(string(out), -1) {
+	for _, match := range txChain.FindAllStringSubmatch(string(outb.String()), -1) {
 
 		return match[1], nil
 	}
@@ -263,7 +280,7 @@ func (p *PSMLoadApp) work(idx int64) {
 
 	txhash, err := p.broadcastOffer(idx, offer)
 	if err != nil {
-		zap.L().Error("error on cycle", zap.Error(err), zap.Int64("duration_ms", time.Now().Sub(start).Milliseconds()), zap.Int64("duration_nano", time.Now().Sub(start).Nanoseconds()))
+		//zap.L().Error("error on cycle", zap.Error(err), zap.Int64("duration_ms", time.Now().Sub(start).Milliseconds()), zap.Int64("duration_nano", time.Now().Sub(start).Nanoseconds()))
 		return
 	}
 
