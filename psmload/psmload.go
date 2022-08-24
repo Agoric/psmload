@@ -35,7 +35,7 @@ type PSMLoadApp struct {
 func NewPSMLoadApp(instagoric string, workers int64, fee float64) *PSMLoadApp {
 	rc := retryablehttp.NewClient()
 	rc.RetryMax = 10
-	rc.HTTPClient.Timeout = 30 * time.Minute
+	rc.HTTPClient.Timeout = 2 * time.Minute
 	rc.RetryWaitMin = time.Second * 3
 	stdLog, _ := zap.NewStdLogAt(zap.L(), zapcore.DebugLevel)
 	rc.Logger = stdLog
@@ -103,16 +103,6 @@ func (p *PSMLoadApp) provisionAddress(address string) error {
 		return fmt.Errorf("error provisioning")
 	}
 	defer resp.Body.Close()
-	ret, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		zap.L().Error("error reading body", zap.Error(err))
-		return fmt.Errorf("error provisioning")
-	}
-	if string(ret) != "success" {
-		zap.L().Info("body", zap.String("body", string(ret)))
-		return fmt.Errorf("error provisioning")
-	}
-	zap.L().Info("provisioned client", zap.String("address", address))
 	return nil
 }
 func (p *PSMLoadApp) ProvisionKeys() error {
@@ -272,7 +262,7 @@ func (p *PSMLoadApp) waitForTx(tx string) error {
 }
 func (p *PSMLoadApp) work(idx int64) {
 	start := time.Now()
-	offer, err := p.getOffer(0.0001)
+	offer, err := p.getOffer(0.01)
 	if err != nil {
 		zap.L().Error("error on cycle", zap.Error(err), zap.Int64("duration_ms", time.Now().Sub(start).Milliseconds()), zap.Int64("duration_nano", time.Now().Sub(start).Nanoseconds()))
 		return
