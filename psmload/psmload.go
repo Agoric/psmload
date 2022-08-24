@@ -28,25 +28,34 @@ type PSMLoadApp struct {
 	keys       []string
 	chainId    string
 	boardId    string
+	stateDir   string
 	mtx        sync.Mutex
 	client     *retryablehttp.Client
 }
 
-func NewPSMLoadApp(instagoric string, workers int64, fee float64) *PSMLoadApp {
+func NewPSMLoadApp(instagoric string, workers int64, fee float64, state string) *PSMLoadApp {
 	rc := retryablehttp.NewClient()
 	rc.RetryMax = 10
 	rc.HTTPClient.Timeout = 2 * time.Minute
 	rc.RetryWaitMin = time.Second * 3
 	stdLog, _ := zap.NewStdLogAt(zap.L(), zapcore.DebugLevel)
 	rc.Logger = stdLog
-	return &PSMLoadApp{
+
+	p := PSMLoadApp{
 		Instagoric: instagoric,
 		Workers:    workers,
 		Fee:        fee,
-		homeDir:    filepath.Join(os.TempDir(), fmt.Sprintf("agoric_%d", time.Now().UnixNano())),
 		keys:       make([]string, workers),
 		client:     rc,
+		stateDir:   state,
 	}
+
+	if state != "" {
+		p.homeDir = state
+	} else {
+		p.homeDir = filepath.Join(os.TempDir(), fmt.Sprintf("agoric_%d", time.Now().UnixNano()))
+	}
+	return &p
 }
 
 func keyName(idx int64) string {
@@ -59,14 +68,30 @@ var txChain = regexp.MustCompile(`(?m)txhash: (.+?)$`)
 
 func (p *PSMLoadApp) newKey(idx int64) (string, string, error) {
 	keyname := keyName(idx)
-	out, err := exec.Command("agd", "keys", "add", keyname, "--keyring-backend", "test", "--home", p.homeDir, "--no-backup").Output()
-
-	if err != nil {
-		zap.L().Error("error creating key", zap.Error(err), zap.ByteString("output", out))
+	// check if already initialized
+	if p.stateDir != "" {
+		cmdList, err := exec.Command("agd", "keys", "show", keyname, "--keyring-backend", "test", "--home", p.homeDir).Output()
+		if err == nil {
+			// key exists
+			for _, match := range re.FindAllStringSubmatch(string(cmdList), -1) {
+				return match[1], keyname, nil
+			}
+		}
 	}
 
-	for _, match := range re.FindAllStringSubmatch(string(out), -1) {
+	cmd := exec.Command("agd", "keys", "add", keyname, "--keyring-backend", "test", "--home", p.homeDir, "--no-backup")
 
+	var outb, errb bytes.Buffer
+	cmd.Stdout = &outb
+	cmd.Stderr = &errb
+	err := cmd.Run()
+	out := outb.String()
+
+	if err != nil {
+		zap.L().Error("error creating key", zap.Error(err), zap.String("output", out))
+	}
+
+	for _, match := range re.FindAllStringSubmatch(out, -1) {
 		return match[1], keyname, nil
 	}
 
@@ -295,5 +320,7 @@ func (p *PSMLoadApp) GetBoard() (string, error) {
 	return "", fmt.Errorf("error getting contract id")
 }
 func (p *PSMLoadApp) Cleanup() {
-	os.RemoveAll(p.homeDir)
+	if p.stateDir == "" {
+		os.RemoveAll(p.homeDir)
+	}
 }
